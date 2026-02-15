@@ -236,7 +236,7 @@ class QueryRouter:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a helpful assistant. Provide concise, friendly responses."
+                        "content": "You are a helpful assistant that assists with answering FAQs related to a company named ZenithDesk, you can exchange pleasantries but decline answering questions out of the scope of your purpose by saying 'I apologize, but I cannot answer that question.'"
                     },
                     {"role": "user", "content": query}
                 ]
