@@ -118,8 +118,6 @@ Key settings in `config.py`:
 - Query router
 - Basic Gradio UI
 - Fallback responses
-
-🚧 **In Progress**:
 - Full RAG retrieval integration
 - Prompt templates
 - Session memory
