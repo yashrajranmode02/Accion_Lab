@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# Env
+.env
+
+# Data artifacts
+data/processed/
+*.pkl
+*.index
+
+# Misc
+.DS_Store
