@@ -8,6 +8,8 @@ responses based on prompts constructed with retrieved context.
 from openai import OpenAI
 from typing import List, Dict
 
+from observability.metrics import observe_generation
+
 
 def generate_response(
     messages: List[Dict],
@@ -39,11 +41,23 @@ def generate_response(
     client = OpenAI(api_key=api_key)
     
     try:
+        import time
+
+        start = time.perf_counter()
         response = client.chat.completions.create(
             model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens
+        )
+        end = time.perf_counter()
+
+        # Prometheus-style generation metrics
+        usage = getattr(response, "usage", None)
+        total_tokens = getattr(usage, "total_tokens", None) if usage is not None else None
+        observe_generation(
+            latency_ms=(end - start) * 1000.0,
+            token_usage=total_tokens,
         )
         
         return response.choices[0].message.content

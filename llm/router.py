@@ -10,6 +10,7 @@ from openai import OpenAI
 from pathlib import Path
 from typing import Literal, List, Dict
 import sys
+import time
 
 # Add parent directory for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -17,6 +18,9 @@ sys.path.append(str(Path(__file__).parent.parent))
 from rag._05_retrieve import Retriever
 from llm.prompt import build_rag_prompt
 from llm.responder import generate_response
+from observability.metrics import RequestTimer
+from observability.tracing import span
+from observability.rag_quality_metrics import compute_rag_quality_scores
 
 
 def load_faq_summary(summary_path: Path) -> str:
@@ -167,6 +171,7 @@ class QueryRouter:
         self.general_model = general_model
         self.chat_model = chat_model
         self.api_key = api_key
+        # OpenAI client for general responses
         self.client = OpenAI(api_key=api_key)
         
         # RAG settings
@@ -293,49 +298,79 @@ class QueryRouter:
         Libraries:
             openai, faiss (via Retriever)
         """
-        # Classify the query
-        classification = self.classify(query)
-        
-        if classification == "IN_SCOPE":
-            # FAQ-related query - perform RAG
-            if self.retriever is None:
-                # Fallback if retriever not loaded
-                response_text = "Main RAG functionality is being worked on, please try later."
-            else:
-                try:
-                    # Retrieve relevant chunks
-                    retrieved_chunks = self.retriever.retrieve(query, top_k=self.top_k)
+        with RequestTimer(endpoint="chat"):
+            with span(
+                "rag.request",
+                {
+                    "query_text": query,
+                    "retriever_model": self.embedding_model,
+                    "generator_model": self.chat_model,
+                },
+            ):
+                # Classify the query
+                classification = self.classify(query)
+                
+                if classification == "IN_SCOPE":
+                    # FAQ-related query - perform RAG
+                    if self.retriever is None:
+                        # Fallback if retriever not loaded
+                        response_text = "Main RAG functionality is being worked on, please try later."
+                    else:
+                        try:
+                            with span("rag.retrieval"):
+                                # Retrieve relevant chunks
+                                retrieved_chunks = self.retriever.retrieve(query, top_k=self.top_k)
+                            
+                            with span("rag.prompt_construction", {"top_k_documents": len(retrieved_chunks)}):
+                                # Build prompt with context and history
+                                messages = build_rag_prompt(query, retrieved_chunks, self.history)
+                            
+                            with span("rag.generation"):
+                                # Generate response
+                                response_text = generate_response(
+                                    messages,
+                                    self.chat_model,
+                                    self.api_key
+                                )
+                            
+                            with span(
+                                "rag.post_processing",
+                                {
+                                    "response_length": len(response_text),
+                                    "query_text": query,
+                                },
+                            ):
+                                compute_rag_quality_scores(
+                                    query=query,
+                                    retrieved_chunks=retrieved_chunks,
+                                    answer=response_text,
+                                    embedding_model=self.embedding_model,
+                                    api_key=self.api_key,
+                                    query_type="IN_SCOPE",
+                                    retriever_model=self.embedding_model,
+                                )
+                            
+                            # Update conversation memory
+                            self._update_history(query, response_text)
+                            
+                        except Exception as e:
+                            print(f"✗ Error in RAG pipeline: {e}")
+                            response_text = "I apologize, but I encountered an error processing your question."
                     
-                    # Build prompt with context and history
-                    messages = build_rag_prompt(query, retrieved_chunks, self.history)
-                    
-                    # Generate response
-                    response_text = generate_response(
-                        messages,
-                        self.chat_model,
-                        self.api_key
-                    )
-                    
-                    # Update conversation memory
-                    self._update_history(query, response_text)
-                    
-                except Exception as e:
-                    print(f"✗ Error in RAG pipeline: {e}")
-                    response_text = "I apologize, but I encountered an error processing your question."
+                    response = {
+                        "classification": "IN_SCOPE",
+                        "response": response_text
+                    }
+                else:
+                    with span("rag.general_generation"):
+                        # General query - generate response (no memory for out-of-scope)
+                        general_response = self.generate_general_response(query)
+                    response = {
+                        "classification": "OUT_OF_SCOPE",
+                        "response": general_response
+                    }
             
-            response = {
-                "classification": "IN_SCOPE",
-                "response": response_text
-            }
-        else:
-            # General query - generate response (no memory for out-of-scope)
-            general_response = self.generate_general_response(query)
-            response = {
-                "classification": "OUT_OF_SCOPE",
-                "response": general_response
-            }
-        
-        return response
+            return response
 
 
 if __name__ == "__main__":

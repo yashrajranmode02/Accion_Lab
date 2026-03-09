@@ -1,11 +1,12 @@
 """
 Gradio UI for FAQ RAG Chatbot.
 
-This module provides a simple chat interface that delegates all logic to the router.
-The UI is purely presentational - it displays responses from the router without
-performing any LLM calls or decision-making.
+This module provides:
+ - A chat interface that delegates all logic to the router.
+ - An Observability Dashboard tab for monitoring the RAG pipeline.
 """
 
+import os
 import gradio as gr
 import sys
 from pathlib import Path
@@ -27,6 +28,15 @@ from config import (
     MAX_HISTORY_TURNS
 )
 from llm.router import QueryRouter
+from observability.dashboard_ui import build_observability_tab
+from observability.metrics import start_metrics_server
+from observability.tracing import init_tracer
+
+
+# Initialize observability backends
+init_tracer(service_name="zenithdesk-faq-rag")
+metrics_port = int(os.getenv("METRICS_PORT", "8000"))
+start_metrics_server(port=metrics_port)
 
 
 # Initialize router (handles all LLM logic)
@@ -71,28 +81,31 @@ def chat_handler(message: str, history: list) -> str:
 
 def create_ui():
     """
-    Create and configure the Gradio chat interface.
+    Create and configure the Gradio UI with:
+     - Chat tab for normal interactions.
+     - Observability tab for monitoring metrics and traces.
     
     Returns:
-        gr.ChatInterface: Configured Gradio chat interface
-        
-    Libraries:
-        gradio
+        gr.Blocks: Configured Gradio Blocks app
     """
-    interface = gr.ChatInterface(
-        fn=chat_handler,
-        title="ZenithDesk FAQ Chatbot",
-        description="Ask questions about ZenithDesk using our knowledge base, or chat generally!",
-        examples=[
-            "How do I reset my password?",
-            "What are the pricing plans?",
-            "Hello!",
-            "How do I integrate with Slack?"
-        ],
-        theme=gr.themes.Glass()
-    )
-    
-    return interface
+    with gr.Blocks() as app:
+        with gr.Tab("Chat"):
+            gr.ChatInterface(
+                fn=chat_handler,
+                title="ZenithDesk FAQ Chatbot",
+                description="Ask questions about ZenithDesk using our knowledge base, or chat generally!",
+                examples=[
+                    "How do I reset my password?",
+                    "What are the pricing plans?",
+                    "Hello!",
+                    "How do I integrate with Slack?"
+                ],
+            )
+
+        with gr.Tab("Observability"):
+            build_observability_tab()
+
+    return app
 
 
 if __name__ == "__main__":

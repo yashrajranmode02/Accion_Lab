@@ -8,9 +8,13 @@ chunks for a given query.
 import faiss
 import pickle
 import numpy as np
+import time
 from pathlib import Path
 from typing import List, Dict, Tuple
+
 from rag._03_embed import embed_query
+from observability.metrics import observe_retrieval
+#from observability.phoenix_logger import log_retrieval_event
 
 
 def load_index_and_metadata(
@@ -87,19 +91,35 @@ def retrieve_top_k(
     query_embedding = embed_query(query, embedding_model, api_key)
     
     # Reshape for FAISS (needs 2D array)
-    query_embedding = query_embedding.reshape(1, -1)
+    query_embedding_2d = query_embedding.reshape(1, -1)
     
     # Search FAISS index
-    distances, indices = index.search(query_embedding, top_k)
+    start_time = time.perf_counter()
+    distances, indices = index.search(query_embedding_2d, top_k)
+    end_time = time.perf_counter()
+    observe_retrieval(latency_ms=(end_time - start_time) * 1000.0)
     
     # Retrieve corresponding chunks
     retrieved_chunks = []
     for idx, distance in zip(indices[0], distances[0]):
         if idx < len(chunks):  # Safety check
             chunk = chunks[idx].copy()
-            chunk['distance'] = float(distance)
+            chunk["distance"] = float(distance)
             retrieved_chunks.append(chunk)
-    
+
+    # Best-effort logging to Arize Phoenix for retrieval analysis.
+    # try:
+    #     log_retrieval_event(
+    #         query=query,
+    #         query_embedding=query_embedding.tolist(),
+    #         retrieved_chunks=retrieved_chunks,
+    #         distances=distances[0].tolist(),
+    #         model_name=embedding_model,
+    #     )
+    # except Exception:
+    #     # Observability must not impact main control flow.
+    #     pass
+
     return retrieved_chunks
 
 
